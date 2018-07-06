@@ -1,0 +1,51 @@
+sudo: required
+language: node_js
+node_js:
+  - '6'
+
+cache:
+  directories:
+    - ./node_modules
+
+before_script:
+  # installs aws tools needed to deal with s3 buckets
+  - gem update --system
+  - sudo apt-get install -y python3.4
+  - sudo apt-get install --upgrade -y python-pip
+  - sudo pip install --upgrade awscli
+  # creates branch link - you may want to change 'testing-' to something more related to what you do
+  - "export S3_DEPLOY_BUCKET=testing-${TRAVIS_BRANCH//_/-}"
+  - "export APP_WEBHOST=http://$S3_DEPLOY_BUCKET.s3-website-$AWS_REGION.amazonaws.com"
+
+
+script:
+  # creates s3 bucket if doesnt exist
+  - |
+    if aws s3api head-bucket --bucket "$S3_DEPLOY_BUCKET" 2>/dev/null; then 
+      echo "bucket $S3_DEPLOY_BUCKET already exists"
+    else
+      aws s3 mb s3://$S3_DEPLOY_BUCKET --region eu-west-1
+      aws s3 website s3://$S3_DEPLOY_BUCKET --index-document index.html --error-document index.html  
+    fi
+# run your tests & build here
+  - npm install
+  - npm run test
+  - npm build
+
+deploy:
+  - provider: s3
+    access_key_id: $AWS_ACCESS_KEY_ID
+    secret_access_key: $AWS_SECRET_ACCESS_KEY
+    region: "eu-west-1"
+    bucket: $S3_DEPLOY_BUCKET
+    skip_cleanup: true
+    local_dir: dist
+    acl: public_read
+    on:
+      all_branches: true
+
+after_deploy:
+  # sends slack notification
+  - export AUTHOR_NAME="$(git log -1 $TRAVIS_COMMIT --pretty="%aN")"
+  - export LAST_COMMIT_COMMENT="$(git log -1 --pretty="%B")"
+  - "curl -X POST --data-urlencode \"payload={\'channel\':\'SLACK_CHANNEL\',\'username\':\'$SLACK_USERNAME\',\'text\':\'*$AUTHOR_NAME* pushed *$TRAVIS_BRANCH* branch to :cloud: <$APP_WEBHOST| click here> to test, last message: _$LAST_COMMIT_COMMENT _\'}\" $SLACK_NOTIFICATION_URL --insecure"
